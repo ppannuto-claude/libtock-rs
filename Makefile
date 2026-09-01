@@ -210,12 +210,16 @@ $(eval $(call platform_build,clue_nrf52840,thumbv7em-none-eabi))
 $(eval $(call platform_flash,clue_nrf52840,thumbv7em-none-eabi))
 $(eval $(call platform_build,psc3m5_evk,thumbv8m.main-none-eabi))
 
+# The demo apps. Each is a standalone cargo workspace with its own Makefile and
+# its own target directory, so blanket rules have to visit each of them.
+DEMOS := demos/embedded_graphics/spin \
+         demos/embedded_graphics/buttons \
+         demos/st7789 \
+         demos/st7789-slint
+
 .PHONY: demos
 demos:
-	$(MAKE) -C demos/embedded_graphics/spin
-	$(MAKE) -C demos/embedded_graphics/buttons
-	$(MAKE) -C demos/st7789
-	$(MAKE) -C demos/st7789-slint
+	@for demo in $(DEMOS); do $(MAKE) -C "$$demo" || exit 1; done
 
 # clean cannot safely be invoked concurrently with other actions, so we don't
 # need to depend on toolchain. We also manually remove the nightly toolchain's
@@ -225,5 +229,5 @@ demos:
 clean:
 	cargo clean
 	rm -fr nightly/target/
-	cd demos/st7789 && cargo clean
+	@for demo in $(DEMOS); do (cd "$$demo" && cargo clean) || exit 1; done
 	$(MAKE) -C tock clean
