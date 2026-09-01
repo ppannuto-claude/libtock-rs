@@ -1,6 +1,23 @@
 use super::Cli;
+use std::env::{var, VarError};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+
+// The QEMU binary to run. libtock-rs uses whatever QEMU is installed on the
+// system rather than building its own; `LIBTOCK_QEMU` overrides which binary
+// that is, for people who have a QEMU build somewhere other than their PATH.
+const DEFAULT_QEMU: &str = "qemu-system-riscv32";
+const QEMU_VAR: &str = "LIBTOCK_QEMU";
+
+fn qemu_binary() -> String {
+    match var(QEMU_VAR) {
+        Ok(binary) => binary,
+        Err(VarError::NotPresent) => DEFAULT_QEMU.into(),
+        Err(VarError::NotUnicode(binary)) => {
+            panic!("Non-UTF-8 {QEMU_VAR} value: {binary:?}")
+        }
+    }
+}
 
 // Spawns a QEMU VM with a simulated Tock system and the process binary. Returns
 // the handle for the spawned QEMU process.
@@ -14,7 +31,8 @@ pub fn deploy(cli: &Cli, platform: String, tbf_path: PathBuf) -> Child {
             .expect("Non-UTF-8 path"),
         platform_args.process_binary_load_address,
     );
-    let mut qemu = Command::new("tock/tools/qemu/build/qemu-system-riscv32");
+    let binary = qemu_binary();
+    let mut qemu = Command::new(&binary);
     qemu.args(["-device", &device, "-nographic", "-serial", "mon:stdio"]);
     qemu.args(platform_args.fixed_args);
     // If we let QEMU inherit its stdin from us, it will set it to raw mode,
@@ -32,7 +50,14 @@ pub fn deploy(cli: &Cli, platform: String, tbf_path: PathBuf) -> Child {
         println!("QEMU command: {qemu:?}");
         println!("Spawning QEMU")
     }
-    qemu.spawn().expect("failed to spawn QEMU")
+    qemu.spawn().unwrap_or_else(|error| {
+        panic!(
+            "failed to spawn QEMU ({binary}): {error}\n\
+             Install a QEMU with 32-bit RISC-V support (the qemu-system-misc package on \
+             Debian and Ubuntu, qemu-system-riscv on Fedora, or qemu on Homebrew), or point \
+             {QEMU_VAR} at a qemu-system-riscv32 binary."
+        )
+    })
 }
 
 // Returns the command line arguments for the given platform to qemu. Panics if
@@ -48,11 +73,17 @@ fn get_platform_args(platform: String) -> PlatformConfig {
             process_binary_load_address: "0x20040000",
         },
         "opentitan" => PlatformConfig {
+            // The earlgrey-cw310 kernel is linked to start at ORIGIN(rom) plus
+            // the size of the manifest, so QEMU has to be told to reset there
+            // rather than at the start of the ROM. These arguments mirror the
+            // `qemu` target in Tock's boards/opentitan/earlgrey-cw310/Makefile.
+            // They replace a `-bios tock/tools/qemu-runner/opentitan-boot-rom.elf`
+            // argument that referred to a file which no longer exists in Tock.
             #[rustfmt::skip]
             fixed_args: &[
-                "-bios", "tock/tools/qemu-runner/opentitan-boot-rom.elf",
                 "-kernel", "tock/target/riscv32imc-unknown-none-elf/release/earlgrey-cw310",
                 "-M", "opentitan",
+                "-global", "driver=riscv.lowrisc.ibex.soc,property=resetvec,value=0x20000400",
             ],
             process_binary_load_address: "0x20030000",
         },

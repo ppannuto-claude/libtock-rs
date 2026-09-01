@@ -65,14 +65,28 @@ toolchain:
 	cargo -V
 
 .PHONY: setup
-setup: setup-qemu toolchain
+setup: toolchain
 	cargo install elf2tab
 
-# Sets up QEMU in the tock/ directory. We use Tock's QEMU which may contain
-# patches to better support boards that Tock supports.
-.PHONY: setup-qemu
-setup-qemu:
-	CI=true $(MAKE) -C tock ci-setup-qemu
+# The QEMU binary used by the `qemu-example*` targets. libtock-rs uses whichever
+# QEMU is installed on the system rather than building one; override this if
+# your qemu-system-riscv32 is not on your PATH. This is exported so that it
+# reaches `runner`, which is what actually spawns QEMU.
+LIBTOCK_QEMU ?= qemu-system-riscv32
+export LIBTOCK_QEMU
+
+# Verifies a usable QEMU is present before we spend time building a kernel for
+# it, so that a missing QEMU is reported as a sentence rather than as a failure
+# to spawn a process.
+.PHONY: check-qemu
+check-qemu:
+	@command -v "$(LIBTOCK_QEMU)" >/dev/null 2>&1 || { \
+		echo "Could not find '$(LIBTOCK_QEMU)'."; \
+		echo "Install a QEMU with 32-bit RISC-V support -- the qemu-system-misc"; \
+		echo "package on Debian and Ubuntu, qemu-system-riscv on Fedora, or qemu"; \
+		echo "on Homebrew -- or set LIBTOCK_QEMU to a qemu-system-riscv32 binary."; \
+		exit 1; \
+	}
 
 # Builds a Tock 2.0 kernel for the HiFive board for use by QEMU tests.
 .PHONY: kernel-hifive
@@ -95,9 +109,15 @@ print-sizes: examples toolchain
 
 # Runs a libtock example in QEMU on a simulated HiFive board.
 .PHONY: qemu-example
-qemu-example: kernel-hifive toolchain
+qemu-example: check-qemu kernel-hifive toolchain
 	LIBTOCK_PLATFORM="hifive1" cargo run --example "$(EXAMPLE)" -p libtock \
 		--release --target=riscv32imac-unknown-none-elf -- --deploy qemu
+
+# Runs a libtock example in QEMU on a simulated OpenTitan earlgrey-cw310 board.
+.PHONY: qemu-example-opentitan
+qemu-example-opentitan: check-qemu kernel-opentitan toolchain
+	LIBTOCK_PLATFORM="opentitan" cargo run --example "$(EXAMPLE)" -p libtock \
+		--release --target=riscv32imc-unknown-none-elf -- --deploy qemu
 
 # Build the examples on both a RISC-V target and an ARM target. We pick
 # opentitan as the RISC-V target because it lacks atomics.

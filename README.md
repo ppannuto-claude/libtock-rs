@@ -31,6 +31,12 @@ builds examples for a series of likely useful flash and RAM addresses.
     make setup
     ```
 
+1.  If you want to run examples under emulation, install a QEMU with 32-bit
+    RISC-V support. That is the `qemu-system-misc` package on Debian and
+    Ubuntu, `qemu-system-riscv` on Fedora, and `qemu` on Homebrew. libtock-rs
+    uses the `qemu-system-riscv32` on your `PATH`; set `LIBTOCK_QEMU` if you
+    want it to use a QEMU installed somewhere else.
+
 1.  Use `make` to build examples
 
     ```shell
@@ -75,6 +81,17 @@ FEATURES=rust_embedded
 
 If using libtock-rs or a sub-crate as a cargo dependency the `rust_embedded`
 can also be enabled via Cargo.
+
+### Running an example under emulation
+
+Examples can be run without hardware on a QEMU-emulated board. This builds a
+Tock kernel from the `tock` submodule, so it needs the submodule to have been
+checked out:
+
+```shell
+make qemu-example EXAMPLE=console            # simulated HiFive1
+make qemu-example-opentitan EXAMPLE=console  # simulated OpenTitan earlgrey-cw310
+```
 
 ### Building a generic TAB (Tock Application Bundle) file
 
