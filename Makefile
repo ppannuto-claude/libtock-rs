@@ -13,25 +13,10 @@ usage:
 	@echo
 	@echo "The next step is to choose a board to build Tock for. Mainline"
 	@echo "libtock-rs currently includes support for the following platforms:"
-	@echo " - apollo3"
-	@echo " - clue_nrf52840"
-	@echo " - esp32_c3_devkitm_1"
-	@echo " - hail"
-	@echo " - hifive1"
-	@echo " - imxrt1050"
-	@echo " - microbit_v2"
-	@echo " - nrf52"
-	@echo " - nrf52840"
-	@echo " - nucleo_f429zi"
-	@echo " - nucleo_f446re"
-	@echo " - opentitan"
-	@echo " - qemu_rv32_virt"
-	@echo " - stm32f3discovery"
-	@echo " - stm32f412gdiscovery"
-	@echo " - esp32_c3_devkitm_1"
-	@echo " - clue_nrf52840"
-	@echo " - raspberry_pi_pico"
-	@echo " - pico_explorer_base"
+	@printf " - %s\n" $(sort $(PLATFORMS))
+	@echo
+	@echo "Of those, the following can be flashed directly with 'make flash-<board>':"
+	@printf " - %s\n" $(sort $(FLASH_PLATFORMS))
 	@echo
 	@echo "Run 'make setup' to setup Rust to build libtock-rs."
 	@echo "Run 'make <board> EXAMPLE=<>' to build EXAMPLE for that board."
@@ -158,10 +143,13 @@ tab: $(ELF_TARGETS)
 #  1) The name of the platform to build for.
 #  2) The target architecture the platform uses.
 #
+# PLATFORMS accumulates the canonical list to prevent drift.
+#
 # A different --target-dir is passed for each platform to prevent race
 # conditions between concurrent cargo run invocations. See
 # https://github.com/tock/libtock-rs/issues/366 for more information.
 define platform_build
+PLATFORMS += $(1)
 .PHONY: $(1)
 $(1): toolchain
 	LIBTOCK_PLATFORM=$(1) cargo run --example $(EXAMPLE) $(features) \
@@ -173,7 +161,11 @@ endef
 
 # Creates the `make flash-<BOARD> EXAMPLE=<EXAMPLE>` targets. Arguments:
 #  1) The name of the platform to flash for.
+#  2) The target architecture the platform uses.
+#
+# FLASH_PLATFORMS accumulates the canonical list to prevent drift.
 define platform_flash
+FLASH_PLATFORMS += $(1)
 .PHONY: flash-$(1)
 flash-$(1): toolchain
 	LIBTOCK_PLATFORM=$(1) cargo run --example $(EXAMPLE) $(features) \
