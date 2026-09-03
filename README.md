@@ -4,8 +4,9 @@
 
 Rust userland library for Tock
 
-Generally this library was tested with Tock [Release
-2.1.1](https://github.com/tock/tock/releases/tag/release-2.1.1).
+Generally this library tracks recent Tock master; the kernels it builds to run
+examples under emulation are pinned to a specific commit (`TOCK_COMMIT` in
+`Makefile.qemu`).
 
 The library should work on all Tock boards, but currently apps must be compiled
 for the flash and RAM address they are executed at. See [Fix
@@ -32,9 +33,9 @@ builds examples for a series of likely useful flash and RAM addresses.
     ```
 
 1.  If you want to run examples under emulation, install a QEMU with 32-bit
-    RISC-V support: `qemu-system-misc` on Debian and Ubuntu,
-    `qemu-system-riscv` on Fedora, `qemu` on Homebrew. `make setup-qemu`
-    reports whether the one you have will do.
+    RISC-V support: `qemu-system-misc` or, on newer releases, `qemu-system-riscv`
+    on Debian and Ubuntu; `qemu-system-riscv` on Fedora; `qemu` on Homebrew.
+    `make setup-qemu` reports whether the one you have will do.
 
 1.  Use `make` to build examples
 
@@ -96,7 +97,7 @@ build against a Tock tree of your own instead — a branch you are working on,
 say — point `TOCK_DIR` at it:
 
 ```shell
-make qemu-example-qemu_rv32_virt EXAMPLE=console TOCK_DIR=~/src/tock
+make qemu-example-qemu_rv32_virt EXAMPLE=console TOCK_DIR=$HOME/src/tock
 ```
 
 A tree you supply this way is used exactly as it is: libtock-rs never fetches

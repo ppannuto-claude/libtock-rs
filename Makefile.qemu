@@ -11,7 +11,8 @@ LIBTOCK_CACHE_DIR ?= $(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)/li
 endif
 
 # The Tock revision we build kernels from.
-# Pinned to a recent master (2026-09-01).
+# Pinned to a recent master (2026-09-01). To move it, change TOCK_COMMIT; the
+# next build refetches, and `make clean-tock-cache` discards the old tree.
 TOCK_URL ?= https://github.com/tock/tock.git
 TOCK_COMMIT ?= 0aca6dae5307c35ff19856449891d5cb10342061
 
@@ -31,9 +32,15 @@ TOCK_DIR_IS_OURS := $(if $(filter $(LIBTOCK_CACHE_DIR)/tock,$(TOCK_DIR)),true,)
 # Tock's flags for any tree underneath this repository, and the kernel build
 # fails with "Incorrect build configuration". Catch that here, where we can
 # explain it, rather than letting it surface from a build script.
+#
+# TOCK_DIR need not exist yet, so resolve it lexically when it is not there to
+# be resolved for real. That does not follow symlinks, but it is better than
+# having no path to compare at all.
 .PHONY: check-tock-dir
 check-tock-dir:
-	@case "$$(cd "$(dir $(TOCK_DIR))" 2>/dev/null && pwd -P)/" in \
+	@if [ -d "$(TOCK_DIR)" ]; then dir="$$(cd "$(TOCK_DIR)" && pwd -P)"; \
+	else dir="$(abspath $(TOCK_DIR))"; fi; \
+	case "$$dir/" in \
 		"$(CURDIR)"/*) \
 			echo "TOCK_DIR ($(TOCK_DIR)) is inside the libtock-rs repository."; \
 			echo "Tock kernels cannot be built there: libtock-rs' .cargo/config.toml"; \
@@ -47,17 +54,22 @@ check-tock-dir:
 # A tree the user supplied is only checked for existence. One of ours is created
 # on demand and pinned to TOCK_COMMIT; we fetch a single commit rather than
 # cloning, as Tock's history is an order of magnitude larger than its worktree.
+#
+# Every git command names the repository explicitly, because git searches parent
+# directories for one: without that, a cache directory that happens to sit
+# inside a repository -- a home directory under version control, say -- would be
+# the repository we fetched into and checked out.
 .PHONY: setup-tock
 setup-tock: check-tock-dir
 	@if [ -n "$(TOCK_DIR_IS_OURS)" ]; then \
-		if [ "$$(git -C "$(TOCK_DIR)" rev-parse HEAD 2>/dev/null)" != "$(TOCK_COMMIT)" ]; then \
+		head=""; \
+		if [ -e "$(TOCK_DIR)/.git" ]; then \
+			head="$$(git --git-dir="$(TOCK_DIR)/.git" rev-parse HEAD 2>/dev/null)"; \
+		fi; \
+		if [ "$$head" != "$(TOCK_COMMIT)" ]; then \
 			echo "Fetching Tock $(TOCK_COMMIT) into $(TOCK_DIR)"; \
-			mkdir -p "$(TOCK_DIR)"; \
-			git -C "$(TOCK_DIR)" rev-parse --git-dir >/dev/null 2>&1 || \
-				git -C "$(TOCK_DIR)" init -q; \
-			git -C "$(TOCK_DIR)" remote get-url origin >/dev/null 2>&1 || \
-				git -C "$(TOCK_DIR)" remote add origin "$(TOCK_URL)"; \
-			git -C "$(TOCK_DIR)" fetch -q --depth 1 origin "$(TOCK_COMMIT)"; \
+			git init -q "$(TOCK_DIR)" && \
+			git -C "$(TOCK_DIR)" fetch -q --depth 1 "$(TOCK_URL)" "$(TOCK_COMMIT)" && \
 			git -C "$(TOCK_DIR)" checkout -q --detach FETCH_HEAD; \
 		fi; \
 	elif [ ! -d "$(TOCK_DIR)" ]; then \
@@ -67,7 +79,11 @@ setup-tock: check-tock-dir
 		echo "TOCK_DIR to use a managed checkout under $(LIBTOCK_CACHE_DIR)."; \
 		exit 1; \
 	fi
-	@echo "Using Tock at $(TOCK_DIR) ($$(git -C "$(TOCK_DIR)" describe --always --dirty 2>/dev/null || echo 'not a git checkout'))"
+	@if [ -e "$(TOCK_DIR)/.git" ]; then \
+		echo "Using Tock at $(TOCK_DIR) ($$(git -C "$(TOCK_DIR)" describe --always --dirty))"; \
+	else \
+		echo "Using Tock at $(TOCK_DIR) (not a git checkout)"; \
+	fi
 
 # The QEMU to run. libtock-rs uses whichever QEMU is installed on the system
 # rather than building one; set this if yours is not on your PATH.
@@ -80,11 +96,16 @@ LIBTOCK_QEMU ?= qemu-system-riscv32
 # which is what you want interactively.
 QEMU_EXPECT ?=
 
-# Give up on an emulated board after this many seconds, and fail. A backstop
-# against a run that hangs, so that it fails rather than waiting forever.
+# Give up on an emulated board after this many seconds, and fail. A backstop for
+# a QEMU_EXPECT that never arrives, so that the run fails rather than waiting
+# forever. On its own it only bounds a board that would otherwise run until it
+# is interrupted, which every emulated board does.
 QEMU_TIMEOUT ?=
 
-qemu_run_args = $(if $(QEMU_EXPECT),--expect '$(QEMU_EXPECT)',) \
+# Passed through the environment rather than interpolated into the recipe, so
+# that the text can contain whatever the board prints, quotes included.
+export QEMU_EXPECT
+qemu_run_args = $(if $(QEMU_EXPECT),--expect "$$QEMU_EXPECT",) \
 	$(if $(QEMU_TIMEOUT),--timeout $(QEMU_TIMEOUT),)
 
 # Versions we have run these boards against, and versions known not to work.
@@ -92,7 +113,7 @@ WORKING_QEMU_VERSIONS := 10.2.1
 BROKEN_QEMU_VERSIONS  := <= 8.1.5
 
 # Checks that a usable QEMU is present, and says which one is about to be used.
-# $(1) is the QEMU machine the caller needs.
+# $(1) is the QEMU machine, or the machines, the caller needs.
 define check_qemu
 	@command -v "$(LIBTOCK_QEMU)" >/dev/null 2>&1 || { \
 		echo "Could not find '$(LIBTOCK_QEMU)'."; \
@@ -101,19 +122,23 @@ define check_qemu
 		echo "or set LIBTOCK_QEMU to a qemu-system-riscv32 binary."; \
 		exit 1; \
 	}
-	@"$(LIBTOCK_QEMU)" -M help | grep -q "^$(1) " || { \
-		echo "$$("$(LIBTOCK_QEMU)" --version | head -n1) does not support the '$(1)' machine."; \
-		echo "(tested: $(WORKING_QEMU_VERSIONS); known broken: $(BROKEN_QEMU_VERSIONS))"; \
-		exit 1; \
-	}
-	@echo "Running $$("$(LIBTOCK_QEMU)" --version | head -n1) with machine '$(1)'" \
+	@for machine in $(1); do \
+		"$(LIBTOCK_QEMU)" -M help | grep -q "^$$machine " || { \
+			echo "$$("$(LIBTOCK_QEMU)" --version | head -n1) does not support the" \
+				"'$$machine' machine."; \
+			echo "(tested: $(WORKING_QEMU_VERSIONS); known broken: $(BROKEN_QEMU_VERSIONS))"; \
+			exit 1; \
+		}; \
+	done
+	@echo "Running $$("$(LIBTOCK_QEMU)" --version | head -n1) with machine(s) '$(1)'" \
 		"(tested: $(WORKING_QEMU_VERSIONS); known broken: $(BROKEN_QEMU_VERSIONS))"
 endef
 
-# Reports whether a usable QEMU is installed, and what it is.
+# Reports whether a usable QEMU is installed, and what it is. Every machine is
+# checked, as this is the answer to "will the QEMU I have run these boards?".
 .PHONY: setup-qemu
 setup-qemu:
-	$(call check_qemu,virt)
+	$(call check_qemu,$(sort $(QEMU_MACHINES)))
 
 # Creates the `make kernel-<PLATFORM>` and `make qemu-example-<PLATFORM>`
 # targets for a board that QEMU can emulate. Arguments:
@@ -121,11 +146,12 @@ setup-qemu:
 #  2) The rust target the platform uses.
 #  3) The board's directory under the Tock tree's boards/.
 #  4) The name of the kernel binary that board produces.
-#  5) The QEMU machine the board runs on, checked before we build anything.
+#  5) The QEMU machine the board runs on, checked before the board is started.
 #
 # Each platform is added to QEMU_PLATFORMS, which the `usage` target prints.
 define qemu_platform
 QEMU_PLATFORMS += $(1)
+QEMU_MACHINES += $(5)
 
 .PHONY: kernel-$(1)
 kernel-$(1): setup-tock
@@ -158,4 +184,4 @@ clean-qemu:
 # it is far more expensive than rebuilding it.
 .PHONY: clean-tock-cache
 clean-tock-cache:
-	rm -rf "$(LIBTOCK_CACHE_DIR)/tock"
+	@[ -z "$(LIBTOCK_CACHE_DIR)" ] || rm -rf "$(LIBTOCK_CACHE_DIR)/tock"
